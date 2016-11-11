@@ -20,24 +20,21 @@ class Connection {
         this.connectionState = ConnectionState.Disconnected;
     }
 
-    start(transportNames?: string[]): Promise<void> {
+    start(transportName: string = 'webSockets'): Promise<void> {
         if (this.connectionState != ConnectionState.Disconnected) {
             throw new Error("Cannot start a connection that is not in the 'Disconnected' state");
         }
 
-        let transports = this.filterTransports(transportNames);
-        if (transports.length == 0) {
-            throw new Error("No valid transports requested.");
-        }
+        let transport = this.createTransport(transportName);
 
         return new HttpClient().get(`${this.url}/getid?${this.queryString}`)
             .then(connectionId => {
                 this.connectionId = connectionId;
                 this.queryString = `id=${connectionId}&${this.connectionId}`;
-                return this.tryStartTransport(transports, 0);
+                this.transport = transport;
+                return transport.connect(this.url, this.queryString);
             })
             .then(transport => {
-                this.transport = transport;
                 this.connectionState = ConnectionState.Connected;
             })
             .catch(e => {
@@ -47,49 +44,18 @@ class Connection {
             });
     }
 
-    private filterTransports(transportNames: string[]): ITransport[] {
-        let availableTransports = ['webSockets', 'serverSentEvents', 'longPolling'];
-        transportNames = transportNames || availableTransports;
-        // uniquify
-        transportNames = transportNames.filter((value, index, values) => {
-            return values.indexOf(value) == index;
-        });
+    private createTransport(transportName: string): ITransport {
+        if (transportName === 'webSockets') {
+            return new WebSocketTransport();
+        }
+        if (transportName === 'serverSentEvents') {
+            return new ServerSentEventsTransport();
+        }
+        if (transportName === 'longPolling') {
+            return new LongPollingTransport();
+        }
 
-        let transports: ITransport[] = [];
-        transportNames.forEach(transportName => {
-            if (transportName === 'webSockets') {
-                transports.push(new WebSocketTransport());
-            }
-            if (transportName === 'serverSentEvents') {
-                transports.push(new ServerSentEventsTransport());
-            }
-            if (transportName === 'longPolling') {
-                transports.push(new LongPollingTransport());
-            }
-        });
-
-        return transports;
-    }
-
-    private tryStartTransport(transports: ITransport[], index: number): Promise<ITransport> {
-        let thisConnection = this;
-        transports[index].onDataReceived = data => thisConnection.dataReceivedCallback(data);
-        transports[index].onError = e => thisConnection.stopConnection(e);
-
-        return transports[index].connect(this.url, this.queryString)
-            .then(() => {
-                return transports[index];
-            })
-            .catch(e => {
-                index++;
-                if (index < transports.length) {
-                    return this.tryStartTransport(transports, index);
-                }
-                else
-                {
-                    throw new Error('No transport could be started.')
-                }
-            })
+        throw new Error("No valid transports requested.");
     }
 
     send(data: any): Promise<void> {
